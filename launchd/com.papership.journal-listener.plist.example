@@ -9,11 +9,11 @@
   <key>ProgramArguments</key>
   <array>
     <string>/opt/homebrew/bin/python3</string>
-    <string>__PAPERSHIP_ROOT__/projects/01_nature_daily_digest/telegram_listener.py</string>
+    <string>__PAPERSHIP_ROOT__/projects/daily_paper_digest/telegram_listener.py</string>
   </array>
 
   <key>WorkingDirectory</key>
-  <string>__PAPERSHIP_ROOT__/projects/01_nature_daily_digest</string>
+  <string>__PAPERSHIP_ROOT__/projects/daily_paper_digest</string>
 
   <key>StandardOutPath</key>
   <string>__HOME__/Library/Logs/PaperShip/journal-listener.out.log</string>

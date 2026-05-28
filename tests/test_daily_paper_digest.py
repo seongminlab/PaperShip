@@ -9,12 +9,12 @@ from tempfile import TemporaryDirectory
 
 
 ROOT = Path(__file__).resolve().parents[1]
-TASK_PATH = ROOT / "projects" / "01_nature_daily_digest" / "task.py"
-LISTENER_PATH = ROOT / "projects" / "01_nature_daily_digest" / "telegram_listener.py"
+TASK_PATH = ROOT / "projects" / "daily_paper_digest" / "task.py"
+LISTENER_PATH = ROOT / "projects" / "daily_paper_digest" / "telegram_listener.py"
 
 
 def load_task_module():
-    spec = importlib.util.spec_from_file_location("nature_daily_digest_task", TASK_PATH)
+    spec = importlib.util.spec_from_file_location("daily_paper_digest_task", TASK_PATH)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Could not load {TASK_PATH}")
     module = importlib.util.module_from_spec(spec)
@@ -27,7 +27,7 @@ task = load_task_module()
 
 
 def load_listener_module():
-    spec = importlib.util.spec_from_file_location("nature_daily_digest_listener", LISTENER_PATH)
+    spec = importlib.util.spec_from_file_location("daily_paper_digest_listener", LISTENER_PATH)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Could not load {LISTENER_PATH}")
     module = importlib.util.module_from_spec(spec)

@@ -1,0 +1,3 @@
+name: daily_paper_digest
+enabled: true
+description: "Send new journal research articles to Telegram with Korean summaries."

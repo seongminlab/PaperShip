@@ -15,7 +15,7 @@ Currently monitored sources:
 
 The source list lives in:
 
-`projects/01_nature_daily_digest/journals.json`
+`projects/daily_paper_digest/journals.json`
 
 Add or remove journals there, then run the tests before relying on the morning automation.
 
@@ -44,7 +44,7 @@ When saving succeeds, the listener:
 - Uses this filename pattern: `{first-author-lastname}-{year}-{first-5-title-words}.pdf`.
 - Generates a Korean 8-sentence summary.
 - Extracts keywords.
-- Updates `data/nature_daily_digest/keywords.json`.
+- Updates `data/daily_paper_digest/keywords.json`.
 - Sends a Telegram confirmation message.
 
 Button saves send a short confirmation with title, keywords, and PDF status. `/save 논문원문링크` sends the same save status plus the Korean summary.
@@ -69,7 +69,7 @@ If polling fails because a Telegram webhook is active, the listener automaticall
 
 Interested-paper keywords are stored in:
 
-`data/nature_daily_digest/keywords.json`
+`data/daily_paper_digest/keywords.json`
 
 The file has two main sections:
 
@@ -79,7 +79,7 @@ The file has two main sections:
 To manually add a keyword, edit the relevant article entry in `articles` and add the keyword to its `keywords` array. Then rebuild keyword frequency counts:
 
 ```bash
-python3 projects/01_nature_daily_digest/telegram_listener.py --rebuild-keywords
+python3 projects/daily_paper_digest/telegram_listener.py --rebuild-keywords
 ```
 
 The `keywords` frequency section is regenerated from the article keyword arrays.
@@ -102,7 +102,7 @@ You can also set these as environment variables if you prefer.
 
 If `OPENAI_API_KEY` is set, summaries are generated as natural Korean. Without it, the project still runs and creates a structured Korean digest from publisher metadata.
 
-The project sends unseen articles whose publication date matches the local date when the code runs or the previous day. For example, a run on `2026-05-27` can send articles published on `2026-05-27` or `2026-05-26`, but articles already recorded in `data/nature_daily_digest/seen_articles.json` are skipped.
+The project sends unseen articles whose publication date matches the local date when the code runs or the previous day. For example, a run on `2026-05-27` can send articles published on `2026-05-27` or `2026-05-26`, but articles already recorded in `data/daily_paper_digest/seen_articles.json` are skipped.
 
 Nature-family journals are discovered from their research article listing pages. Cell and Science-family journals are discovered from official RSS feeds because their article listing or article pages can reject automated HTML requests.
 
@@ -150,6 +150,6 @@ python3 -m unittest discover -s tests
 
 Seen article URLs are stored in:
 
-`data/nature_daily_digest/seen_articles.json`
+`data/daily_paper_digest/seen_articles.json`
 
 To re-send old papers, remove that file.

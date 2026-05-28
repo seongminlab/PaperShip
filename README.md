@@ -58,8 +58,8 @@ Then send your bot another message and open the `getUpdates` URL again.
 
 ## Repository Layout
 
-- `projects/01_nature_daily_digest/`: journal digest project.
-- `projects/01_nature_daily_digest/journals.json`: monitored journal source list.
+- `projects/daily_paper_digest/`: journal digest project.
+- `projects/daily_paper_digest/journals.json`: monitored journal source list.
 - `projects/_template/`: starter template for additional automation projects.
 - `scripts/run_all.py`: runs every enabled project.
 - `config/secrets.env.example`: safe environment variable example.
@@ -116,11 +116,11 @@ PaperShip uses launchd on macOS. See [docs/macos_launchd.md](docs/macos_launchd.
 - Science Advances
 - Science Translational Medicine
 
-Edit [journals.json](projects/01_nature_daily_digest/journals.json) to add or remove journals.
+Edit [journals.json](projects/daily_paper_digest/journals.json) to add or remove journals.
 
 ## Add Journal Sources
 
-Journal sources are configured in [journals.json](projects/01_nature_daily_digest/journals.json).
+Journal sources are configured in [journals.json](projects/daily_paper_digest/journals.json).
 
 For Nature-family research article pages, add an item like:
 

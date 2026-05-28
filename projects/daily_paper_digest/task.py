@@ -20,7 +20,7 @@ from xml.etree import ElementTree
 
 
 ROOT = Path(__file__).resolve().parents[2]
-STATE_DIR = ROOT / "data" / "nature_daily_digest"
+STATE_DIR = ROOT / "data" / "daily_paper_digest"
 SEEN_PATH = STATE_DIR / "seen_articles.json"
 SENT_ARTICLES_PATH = STATE_DIR / "sent_articles.json"
 KEYWORDS_PATH = STATE_DIR / "keywords.json"

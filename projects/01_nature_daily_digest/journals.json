@@ -1,0 +1,58 @@
+[
+  {
+    "name": "Nature",
+    "listing_url": "https://www.nature.com/nature/research-articles",
+    "discovery": "nature_html",
+    "base_url": "https://www.nature.com"
+  },
+  {
+    "name": "Nature Communications",
+    "listing_url": "https://www.nature.com/ncomms/research-articles",
+    "discovery": "nature_html",
+    "base_url": "https://www.nature.com"
+  },
+  {
+    "name": "Nature Methods",
+    "listing_url": "https://www.nature.com/nmeth/research-articles",
+    "discovery": "nature_html",
+    "base_url": "https://www.nature.com"
+  },
+  {
+    "name": "Nature Biotechnology",
+    "listing_url": "https://www.nature.com/nbt/research-articles",
+    "discovery": "nature_html",
+    "base_url": "https://www.nature.com"
+  },
+  {
+    "name": "Cell",
+    "listing_url": "https://www.cell.com/cell/newarticles",
+    "discovery": "rss",
+    "base_url": "https://www.cell.com",
+    "feed_url": "https://www.cell.com/action/showFeed?type=etoc&feed=rss&jc=cell",
+    "allowed_item_types": ["Article", "Short article", "Resource"]
+  },
+  {
+    "name": "Science",
+    "listing_url": "https://www.science.org/journal/science/research",
+    "discovery": "rss",
+    "base_url": "https://www.science.org",
+    "feed_url": "https://www.science.org/action/showFeed?type=etoc&feed=rss&jc=science",
+    "allowed_item_types": ["Research Article"]
+  },
+  {
+    "name": "Science Advances",
+    "listing_url": "https://www.science.org/journal/sciadv/research",
+    "discovery": "rss",
+    "base_url": "https://www.science.org",
+    "feed_url": "https://www.science.org/action/showFeed?type=etoc&feed=rss&jc=sciadv",
+    "allowed_item_types": ["Research Article", "Research Resource"]
+  },
+  {
+    "name": "Science Translational Medicine",
+    "listing_url": "https://www.science.org/journal/stm/research",
+    "discovery": "rss",
+    "base_url": "https://www.science.org",
+    "feed_url": "https://www.science.org/action/showFeed?type=etoc&feed=rss&jc=stm",
+    "allowed_item_types": ["Research Article"]
+  }
+]

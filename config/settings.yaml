@@ -1,0 +1,8 @@
+schedule:
+  hour: 7
+  minute: 0
+
+runner:
+  projects_dir: projects
+  logs_dir: logs
+  stop_on_failure: false

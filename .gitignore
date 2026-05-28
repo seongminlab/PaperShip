@@ -1,0 +1,12 @@
+logs/*
+!logs/.gitkeep
+config/*.env
+!config/*.env.example
+data/
+downloads/
+papers/*
+!papers/.gitkeep
+launchd/*.local.plist
+__pycache__/
+*.pyc
+.DS_Store

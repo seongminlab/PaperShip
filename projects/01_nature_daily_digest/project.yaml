@@ -1,0 +1,3 @@
+name: nature_daily_digest
+enabled: true
+description: "Send new Nature research articles to Telegram with Korean summaries."

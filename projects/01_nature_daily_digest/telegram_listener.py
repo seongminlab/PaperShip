@@ -87,6 +87,13 @@ def send_message(chat_id: int | str, text: str, buttons: list[list[dict[str, str
     telegram_request("sendMessage", payload)
 
 
+def bot_token() -> str:
+    token = os.getenv("TELEGRAM_BOT_TOKEN")
+    if not token:
+        raise RuntimeError("TELEGRAM_BOT_TOKEN is not set")
+    return token
+
+
 def listener_restart_command() -> str:
     return os.getenv("PAPERSHIP_LISTENER_RESTART_COMMAND", DEFAULT_LISTENER_RESTART_COMMAND)
 
@@ -119,6 +126,20 @@ def paper_filename(article: task.Article) -> str:
     title_words = re.findall(r"[A-Za-z0-9]+", article.title.lower())[:5]
     title = "-".join(title_words) or "untitled"
     return f"{author}-{year}-{title}.pdf"
+
+
+def uploaded_pdf_article(document: dict[str, Any]) -> task.Article:
+    filename = str(document.get("file_name") or "uploaded-paper.pdf")
+    title = Path(filename).stem.replace("_", " ").replace("-", " ").strip() or "uploaded paper"
+    return task.Article(
+        url=f"telegram-file://{document.get('file_id') or slugify(filename) or 'uploaded'}",
+        title=title,
+        journal="Uploaded PDF",
+        authors=[],
+        summary_source=title,
+        published=str(datetime.now().date()),
+        pdf_url=None,
+    )
 
 
 def unique_path(path: Path) -> Path:
@@ -161,6 +182,38 @@ def download_pdf(article: task.Article) -> tuple[Path | None, str | None]:
     return path, None
 
 
+def telegram_file_path(file_id: str) -> str:
+    body = telegram_request("getFile", {"file_id": file_id})
+    result = body.get("result", {})
+    if not isinstance(result, dict) or not result.get("file_path"):
+        raise RuntimeError("Telegram 파일 경로를 찾지 못했습니다.")
+    return str(result["file_path"])
+
+
+def download_uploaded_pdf(document: dict[str, Any], article: task.Article) -> Path:
+    file_id = str(document.get("file_id") or "")
+    if not file_id:
+        raise RuntimeError("Telegram file_id를 찾지 못했습니다.")
+
+    file_path = telegram_file_path(file_id)
+    request = Request(
+        f"https://api.telegram.org/file/bot{bot_token()}/{file_path}",
+        headers={"User-Agent": "PaperShip Telegram PDF downloader/1.0"},
+    )
+    timeout = int(os.getenv("JOURNAL_REQUEST_TIMEOUT", os.getenv("NATURE_REQUEST_TIMEOUT", "25")))
+    with urlopen(request, timeout=timeout) as response:
+        content = response.read()
+        content_type = response.headers.get("Content-Type", "")
+
+    if not content.startswith(b"%PDF") and "pdf" not in content_type.lower():
+        raise RuntimeError(f"PDF가 아닌 파일을 받았습니다: {content_type or 'unknown content type'}")
+
+    task.PAPERS_DIR.mkdir(parents=True, exist_ok=True)
+    path = unique_path(task.PAPERS_DIR / paper_filename(article))
+    path.write_bytes(content)
+    return path
+
+
 def source_for_url(url: str) -> task.JournalSource:
     host = task.urlsplit(url).netloc
     for source in task.load_journal_sources():
@@ -196,6 +249,19 @@ def article_from_url(url: str) -> task.Article:
 
     source = source_for_url(canonical)
     return task.fetch_article(task.ArticleCandidate(source=source, url=canonical))
+
+
+def extract_url(text: str) -> str | None:
+    match = URL_RE.search(text)
+    if not match:
+        return None
+    return match.group(0).rstrip(".,)")
+
+
+def is_pdf_document(document: dict[str, Any]) -> bool:
+    filename = str(document.get("file_name") or "").lower()
+    mime_type = str(document.get("mime_type") or "").lower()
+    return filename.endswith(".pdf") or mime_type == "application/pdf"
 
 
 def success_or_failure_message(
@@ -274,6 +340,38 @@ def process_interest(article: task.Article, chat_id: int | str, include_summary:
     )
 
 
+def process_uploaded_pdf(message: dict[str, Any], chat_id: int | str) -> None:
+    document = message.get("document", {})
+    if not isinstance(document, dict) or not is_pdf_document(document):
+        return
+
+    caption = str(message.get("caption") or "").strip()
+    url = extract_url(caption)
+    article = article_from_url(url) if url else uploaded_pdf_article(document)
+    pdf_path = download_uploaded_pdf(document, article)
+
+    if url:
+        summary = task.korean_summary(article)
+        keywords = task.article_keywords(article)
+        task.save_interested_article(article, summary, keywords, pdf_path, None)
+        buttons = task.article_buttons(article, include_interest=False)
+    else:
+        keywords = task.fallback_keywords(article, 3)
+        buttons = None
+
+    keyword_text = ", ".join(html.escape(keyword) for keyword in keywords)
+    send_message(
+        chat_id,
+        (
+            f"<b>PDF 파일 저장</b>\n\n"
+            f"<b>{html.escape(article.title)}</b>\n"
+            f"<b>키워드</b>: {keyword_text or 'N/A'}\n"
+            f"PDF 저장 완료"
+        ),
+        buttons,
+    )
+
+
 def handle_callback(callback_query: dict[str, Any]) -> None:
     callback_id = str(callback_query.get("id") or "")
     data = str(callback_query.get("data") or "")
@@ -317,15 +415,29 @@ def handle_message(message: dict[str, Any]) -> None:
     text = str(message.get("text") or "").strip()
     chat = message.get("chat", {})
     chat_id = chat.get("id") if isinstance(chat, dict) else None
-    if not chat_id or not text.startswith("/save"):
+    if not chat_id:
         return
 
-    match = URL_RE.search(text)
-    if not match:
+    document = message.get("document")
+    if isinstance(document, dict):
+        if is_pdf_document(document):
+            try:
+                process_uploaded_pdf(message, chat_id)
+            except Exception as exc:
+                logging.exception("Could not save uploaded PDF")
+                send_message(chat_id, f"PDF 파일 저장에 실패했습니다.\n이유: {html.escape(str(exc))}")
+        return
+
+    url = extract_url(text)
+    is_save_command = text.startswith("/save")
+    is_url_only = bool(url and text == url)
+    if not is_save_command and not is_url_only:
+        return
+
+    if not url:
         send_message(chat_id, "사용법: <code>/save 논문원문링크</code>")
         return
 
-    url = match.group(0).rstrip(".,)")
     send_message(chat_id, "논문 저장을 시작합니다. PDF와 키워드를 확인하는 동안 잠시 기다려주세요.")
     try:
         article = article_from_url(url)

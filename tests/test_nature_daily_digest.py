@@ -402,6 +402,103 @@ class NatureDailyDigestTests(unittest.TestCase):
         self.assertIn("PDF 저장 완료", sent_messages[0])
         self.assertNotIn("이미 저장된 요약입니다.", sent_messages[0])
 
+    def test_url_only_message_runs_save_flow(self) -> None:
+        article = task.Article(
+            url="https://www.nature.com/articles/s41586-026-00001-1",
+            title="A test paper",
+            journal="Nature",
+            authors=[],
+            summary_source="A source abstract.",
+            published="2026-05-27",
+            pdf_url=None,
+        )
+        processed = []
+        original_article_from_url = listener.article_from_url
+        original_process_interest = listener.process_interest
+        original_send_message = listener.send_message
+        try:
+            listener.article_from_url = lambda url: article
+            listener.process_interest = lambda article_arg, chat_id, include_summary: processed.append(
+                (article_arg.url, chat_id, include_summary)
+            )
+            listener.send_message = lambda chat_id, text, buttons=None: None
+
+            listener.handle_message(
+                {
+                    "chat": {"id": 123},
+                    "text": "https://www.nature.com/articles/s41586-026-00001-1",
+                }
+            )
+        finally:
+            listener.article_from_url = original_article_from_url
+            listener.process_interest = original_process_interest
+            listener.send_message = original_send_message
+
+        self.assertEqual(processed, [(article.url, 123, True)])
+
+    def test_uploaded_pdf_without_caption_uses_filename_fallback(self) -> None:
+        document = {
+            "file_id": "file-123",
+            "file_name": "My Interesting Paper.pdf",
+            "mime_type": "application/pdf",
+        }
+        article = listener.uploaded_pdf_article(document)
+
+        self.assertEqual(
+            listener.paper_filename(article),
+            f"unknown-{listener.datetime.now().year}-my-interesting-paper.pdf",
+        )
+
+    def test_pdf_upload_is_saved_and_confirmed(self) -> None:
+        article = task.Article(
+            url="https://www.nature.com/articles/s41586-026-00001-1",
+            title="A test paper",
+            journal="Nature",
+            authors=["Ada Lovelace"],
+            summary_source="A source abstract.",
+            published="2026-05-27",
+            pdf_url=None,
+        )
+        sent_messages = []
+        original_article_from_url = listener.article_from_url
+        original_download_uploaded_pdf = listener.download_uploaded_pdf
+        original_korean_summary = listener.task.korean_summary
+        original_article_keywords = listener.task.article_keywords
+        original_save_interested_article = listener.task.save_interested_article
+        original_send_message = listener.send_message
+        try:
+            listener.article_from_url = lambda url: article
+            listener.download_uploaded_pdf = lambda document, article_arg: Path("/tmp/lovelace-2026-a-test-paper.pdf")
+            listener.task.korean_summary = lambda article_arg: ["요약 문장입니다."]
+            listener.task.article_keywords = lambda article_arg: ["crispr"]
+            listener.task.save_interested_article = lambda *args: None
+            listener.send_message = lambda chat_id, text, buttons=None: sent_messages.append((chat_id, text, buttons))
+
+            listener.handle_message(
+                {
+                    "chat": {"id": 123},
+                    "caption": "https://www.nature.com/articles/s41586-026-00001-1",
+                    "document": {
+                        "file_id": "file-123",
+                        "file_name": "paper.pdf",
+                        "mime_type": "application/pdf",
+                    },
+                }
+            )
+        finally:
+            listener.article_from_url = original_article_from_url
+            listener.download_uploaded_pdf = original_download_uploaded_pdf
+            listener.task.korean_summary = original_korean_summary
+            listener.task.article_keywords = original_article_keywords
+            listener.task.save_interested_article = original_save_interested_article
+            listener.send_message = original_send_message
+
+        self.assertEqual(sent_messages[0][0], 123)
+        self.assertIn("<b>PDF 파일 저장</b>", sent_messages[0][1])
+        self.assertIn("<b>A test paper</b>", sent_messages[0][1])
+        self.assertIn("<b>키워드</b>: crispr", sent_messages[0][1])
+        self.assertIn("PDF 저장 완료", sent_messages[0][1])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -35,6 +35,8 @@ The Telegram listener handles two ways to save an interested paper:
 
 - Tap the `관심 저장` button under a daily digest message.
 - Send `/save 논문원문링크` to the bot.
+- Send only a paper URL to the bot.
+- Upload a PDF file to the bot. If the PDF message caption contains a paper URL, PaperShip uses the paper metadata for the saved filename; otherwise it falls back to the uploaded PDF filename.
 
 When saving succeeds, the listener:
 

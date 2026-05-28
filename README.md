@@ -59,7 +59,7 @@ Then send your bot another message and open the `getUpdates` URL again.
 ## Repository Layout
 
 - `projects/daily_paper_digest/`: journal digest project.
-- `projects/daily_paper_digest/journals.json`: monitored journal source list.
+- `config/journals.json`: monitored journal source list.
 - `projects/_template/`: starter template for additional automation projects.
 - `scripts/run_all.py`: runs every enabled project.
 - `config/secrets.env.example`: safe environment variable example.
@@ -115,12 +115,17 @@ PaperShip uses launchd on macOS. See [docs/macos_launchd.md](docs/macos_launchd.
 - Science
 - Science Advances
 - Science Translational Medicine
+- JAMA
+- New England Journal of Medicine
+- The Lancet
+- The BMJ
+- Annals of Internal Medicine
 
-Edit [journals.json](projects/daily_paper_digest/journals.json) to add or remove journals.
+Edit [journals.json](config/journals.json) to add or remove journals.
 
 ## Add Journal Sources
 
-Journal sources are configured in [journals.json](projects/daily_paper_digest/journals.json).
+Journal sources are configured in [journals.json](config/journals.json). In normal use, journal additions and removals should only require editing this file.
 
 For Nature-family research article pages, add an item like:
 
@@ -143,6 +148,18 @@ For journals with RSS feeds, add an item like:
   "base_url": "https://example.com",
   "feed_url": "https://example.com/rss",
   "allowed_item_types": ["Research Article"]
+}
+```
+
+For publisher listing pages that expose article links in HTML, add URL patterns:
+
+```json
+{
+  "name": "Example HTML Journal",
+  "listing_url": "https://example.com/research",
+  "discovery": "html_links",
+  "base_url": "https://example.com",
+  "article_url_patterns": ["^/content/[0-9]+/example-[0-9]+$"]
 }
 ```
 

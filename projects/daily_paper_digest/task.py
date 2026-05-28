@@ -25,8 +25,9 @@ SEEN_PATH = STATE_DIR / "seen_articles.json"
 SENT_ARTICLES_PATH = STATE_DIR / "sent_articles.json"
 KEYWORDS_PATH = STATE_DIR / "keywords.json"
 PAPERS_DIR = ROOT / "papers"
-SECRETS_PATH = ROOT / "config" / "secrets.env"
-JOURNALS_PATH = Path(__file__).resolve().parent / "journals.json"
+CONFIG_DIR = ROOT / "config"
+SECRETS_PATH = CONFIG_DIR / "secrets.env"
+JOURNALS_PATH = CONFIG_DIR / "journals.json"
 
 
 @dataclass(frozen=True)
@@ -37,6 +38,7 @@ class JournalSource:
     base_url: str
     feed_url: str | None = None
     allowed_item_types: tuple[str, ...] = ()
+    article_url_patterns: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -63,6 +65,10 @@ class ArticleCandidate:
 
 
 def load_journal_sources(path: Path = JOURNALS_PATH) -> list[JournalSource]:
+    if not path.exists():
+        logging.warning("Journal source config does not exist: %s", path)
+        return []
+
     raw_sources = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(raw_sources, list):
         raise ValueError(f"{path} must contain a JSON array")
@@ -78,11 +84,14 @@ def load_journal_sources(path: Path = JOURNALS_PATH) -> list[JournalSource]:
         base_url = required_string(raw_source, "base_url", path, index)
         feed_url = optional_string(raw_source, "feed_url")
         allowed_item_types = tuple(optional_string_list(raw_source, "allowed_item_types"))
+        article_url_patterns = tuple(optional_string_list(raw_source, "article_url_patterns"))
 
-        if discovery not in {"nature_html", "rss"}:
+        if discovery not in {"nature_html", "rss", "html_links"}:
             raise ValueError(f"{path} item {index} has unsupported discovery: {discovery}")
         if discovery == "rss" and not feed_url:
             raise ValueError(f"{path} item {index} uses rss discovery but has no feed_url")
+        if discovery == "html_links" and not article_url_patterns:
+            raise ValueError(f"{path} item {index} uses html_links discovery but has no article_url_patterns")
 
         sources.append(
             JournalSource(
@@ -92,6 +101,7 @@ def load_journal_sources(path: Path = JOURNALS_PATH) -> list[JournalSource]:
                 base_url=base_url,
                 feed_url=feed_url,
                 allowed_item_types=allowed_item_types,
+                article_url_patterns=article_url_patterns,
             )
         )
 
@@ -127,17 +137,101 @@ def optional_string_list(raw_source: dict[str, Any], key: str) -> list[str]:
 
 
 class LinkParser(HTMLParser):
-    def __init__(self, base_url: str) -> None:
+    def __init__(self, base_url: str, patterns: tuple[str, ...] = (r"^/articles/[a-z0-9-]+$",)) -> None:
         super().__init__()
         self.base_url = base_url
+        self.patterns = tuple(re.compile(pattern) for pattern in patterns)
         self.links: list[str] = []
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         if tag != "a":
             return
         href = dict(attrs).get("href")
-        if href and re.match(r"^/articles/[a-z0-9-]+$", href):
-            self.links.append(urljoin(self.base_url, href))
+        if not href:
+            return
+        absolute_url = urljoin(self.base_url, href)
+        if any(pattern.search(href) or pattern.search(absolute_url) for pattern in self.patterns):
+            self.links.append(absolute_url)
+
+
+class HtmlArticleParser(HTMLParser):
+    def __init__(self, source: JournalSource) -> None:
+        super().__init__()
+        self.source = source
+        self.patterns = tuple(re.compile(pattern) for pattern in source.article_url_patterns)
+        self.entries: dict[str, dict[str, str]] = {}
+        self.current_link_url: str | None = None
+        self.current_link_depth = 0
+        self.current_date_url: str | None = None
+        self.current_date_depth = 0
+        self.last_url: str | None = None
+
+    def matches_article_url(self, href: str, absolute_url: str) -> bool:
+        return any(pattern.search(href) or pattern.search(absolute_url) for pattern in self.patterns)
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        values = dict(attrs)
+        href = values.get("href")
+        if tag == "a" and href:
+            absolute_url = urljoin(self.source.base_url, href)
+            if self.matches_article_url(href, absolute_url):
+                url = canonical_url(absolute_url)
+                self.entries.setdefault(url, {"url": url})
+                self.current_link_url = url
+                self.current_link_depth = 1
+                self.last_url = url
+                return
+
+        if self.current_link_url:
+            self.current_link_depth += 1
+
+        if values.get("data-testid") == "article-entry-date" and self.last_url:
+            self.current_date_url = self.last_url
+            self.current_date_depth = 1
+        elif self.current_date_url:
+            self.current_date_depth += 1
+
+    def handle_endtag(self, tag: str) -> None:
+        if self.current_link_url:
+            self.current_link_depth -= 1
+            if self.current_link_depth <= 0:
+                self.current_link_url = None
+                self.current_link_depth = 0
+
+        if self.current_date_url:
+            self.current_date_depth -= 1
+            if self.current_date_depth <= 0:
+                self.current_date_url = None
+                self.current_date_depth = 0
+
+    def handle_data(self, data: str) -> None:
+        text = re.sub(r"\s+", " ", data).strip()
+        if not text:
+            return
+        if self.current_link_url:
+            entry = self.entries.setdefault(self.current_link_url, {"url": self.current_link_url})
+            entry["title"] = " ".join(part for part in (entry.get("title"), text) if part).strip()
+        if self.current_date_url:
+            entry = self.entries.setdefault(self.current_date_url, {"url": self.current_date_url})
+            entry["published"] = " ".join(part for part in (entry.get("published"), text) if part).strip()
+
+    def article_candidates(self) -> list[ArticleCandidate]:
+        candidates: list[ArticleCandidate] = []
+        for entry in self.entries.values():
+            url = entry["url"]
+            title = entry.get("title", "")
+            candidates.append(
+                ArticleCandidate(
+                    source=self.source,
+                    url=url,
+                    title=title,
+                    journal=self.source.name,
+                    summary_source=title or "No abstract available.",
+                    published=entry.get("published", ""),
+                    pdf_url=build_pdf_url({}, url),
+                )
+            )
+        return candidates
 
 
 class MetaParser(HTMLParser):
@@ -177,8 +271,8 @@ def fetch_text(url: str) -> str:
     request = Request(
         url,
         headers={
-            "User-Agent": "Mozilla/5.0 daily-automation-nature-digest/1.0",
-            "Accept": "text/html,application/xhtml+xml,application/rss+xml,application/xml",
+            "User-Agent": "Mozilla/5.0 PaperShip journal-digest/1.0",
+            "Accept": "text/html,application/xhtml+xml,application/rss+xml,application/xml,text/xml,*/*",
         },
     )
     with urlopen(request, timeout=timeout) as response:
@@ -315,6 +409,12 @@ def discover_nature_article_candidates(source: JournalSource) -> list[ArticleCan
     return [ArticleCandidate(source=source, url=url) for url in discover_nature_article_urls(source)]
 
 
+def discover_html_link_article_candidates(source: JournalSource) -> list[ArticleCandidate]:
+    parser = HtmlArticleParser(source)
+    parser.feed(fetch_text(source.listing_url))
+    return parser.article_candidates()
+
+
 def local_name(tag: str) -> str:
     return tag.rsplit("}", 1)[-1]
 
@@ -328,12 +428,37 @@ def item_fields(item: ElementTree.Element) -> dict[str, list[str]]:
     return fields
 
 
+def rss_items(root: ElementTree.Element) -> list[ElementTree.Element]:
+    rss1_items = root.findall(".//{http://purl.org/rss/1.0/}item")
+    if rss1_items:
+        return rss1_items
+    return root.findall(".//item")
+
+
 def rss_field(fields: dict[str, list[str]], *names: str) -> str:
     for name in names:
         values = fields.get(name)
         if values:
             return values[0]
     return ""
+
+
+def rss_fields(fields: dict[str, list[str]], *names: str) -> list[str]:
+    values: list[str] = []
+    for name in names:
+        values.extend(fields.get(name, []))
+    return values
+
+
+def rss_authors(fields: dict[str, list[str]]) -> tuple[str, ...]:
+    authors: list[str] = []
+    for creator in rss_fields(fields, "creator", "author"):
+        parts = re.split(r",|;|\band\b", creator)
+        for part in parts:
+            author = re.sub(r"\s+", " ", part).strip()
+            if author and author not in authors:
+                authors.append(author)
+    return tuple(authors)
 
 
 def discover_rss_article_urls(source: JournalSource) -> list[str]:
@@ -347,7 +472,7 @@ def discover_rss_article_candidates(source: JournalSource) -> list[ArticleCandid
     root = ElementTree.fromstring(fetch_text(source.feed_url))
     candidates: list[ArticleCandidate] = []
     seen_urls: set[str] = set()
-    for item in root.findall(".//{http://purl.org/rss/1.0/}item"):
+    for item in rss_items(root):
         fields = item_fields(item)
         item_type = rss_field(fields, "type", "section")
         if source.allowed_item_types and item_type not in source.allowed_item_types:
@@ -359,18 +484,16 @@ def discover_rss_article_candidates(source: JournalSource) -> list[ArticleCandid
             if url in seen_urls:
                 continue
             seen_urls.add(url)
-            creator = rss_field(fields, "creator")
-            authors = tuple(part.strip() for part in creator.split(",") if part.strip())
             description = html_to_text(rss_field(fields, "description", "encoded"))
             candidates.append(
                 ArticleCandidate(
                     source=source,
                     url=url,
                     title=rss_field(fields, "title") or "Untitled",
-                    journal=rss_field(fields, "publicationName", "source") or source.name,
-                    authors=authors,
+                    journal=rss_field(fields, "source", "publicationName") or source.name,
+                    authors=rss_authors(fields),
                     summary_source=description or rss_field(fields, "title") or "No abstract available.",
-                    published=rss_field(fields, "publicationDate", "date", "coverDate"),
+                    published=rss_field(fields, "publicationDate", "date", "pubDate", "coverDate"),
                     pdf_url=build_pdf_url({}, url),
                 )
             )
@@ -391,6 +514,8 @@ def discover_article_candidates(source: JournalSource) -> list[ArticleCandidate]
     )
     if source.discovery == "rss":
         return discover_rss_article_candidates(source)[:max_articles]
+    if source.discovery == "html_links":
+        return discover_html_link_article_candidates(source)[:max_articles]
     return discover_nature_article_candidates(source)[:max_articles]
 
 
@@ -432,6 +557,22 @@ def build_pdf_url(meta: dict[str, list[str]], article_url: str) -> str | None:
     cell_match = re.search(r"cell\.com/[^/]+/fulltext/([^?#]+)", article_url)
     if cell_match:
         return f"https://www.cell.com/action/showPdf?pii={quote(cell_match.group(1), safe='')}"
+
+    lancet_match = re.search(r"thelancet\.com/[^?#]+/article/([^/?#]+)/fulltext", article_url)
+    if lancet_match:
+        return f"https://www.thelancet.com/action/showPdf?pii={quote(lancet_match.group(1), safe='')}"
+
+    doi_match = re.search(r"(?:nejm\.org|acpjournals\.org)/doi/(?:abs|full)/([^?#]+)", article_url)
+    if doi_match:
+        return f"https://{urlsplit(article_url).netloc}/doi/pdf/{doi_match.group(1)}"
+
+    bmj_match = re.search(r"bmj\.com/content/([^?#]+)", article_url)
+    if bmj_match:
+        return f"https://www.bmj.com/content/{bmj_match.group(1)}.full.pdf"
+
+    jama_match = re.search(r"jamanetwork\.com/journals/[^/]+/fullarticle/(\d+)", article_url)
+    if jama_match:
+        return f"https://jamanetwork.com/journals/jama/articlepdf/{jama_match.group(1)}"
 
     return None
 

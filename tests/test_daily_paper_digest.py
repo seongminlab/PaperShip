@@ -53,7 +53,8 @@ class NatureDailyDigestTests(unittest.TestCase):
                     "discovery": "rss",
                     "base_url": "https://example.test",
                     "feed_url": "https://example.test/feed",
-                    "allowed_item_types": ["Research Article"]
+                    "allowed_item_types": ["Research Article"],
+                    "article_url_patterns": ["^/content/"]
                   }
                 ]
                 """,
@@ -65,6 +66,13 @@ class NatureDailyDigestTests(unittest.TestCase):
         self.assertEqual(len(sources), 1)
         self.assertEqual(sources[0].name, "Example")
         self.assertEqual(sources[0].allowed_item_types, ("Research Article",))
+        self.assertEqual(sources[0].article_url_patterns, ("^/content/",))
+
+    def test_load_journal_sources_returns_empty_for_missing_config(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "journals.json"
+
+            self.assertEqual(task.load_journal_sources(path), [])
 
     def test_load_journal_sources_rejects_rss_without_feed_url(self) -> None:
         with TemporaryDirectory() as temp_dir:
@@ -106,6 +114,46 @@ class NatureDailyDigestTests(unittest.TestCase):
 
         self.assertEqual(urls, ["https://www.nature.com/articles/s41586-026-00001-1"])
 
+    def test_link_parser_supports_configured_article_patterns(self) -> None:
+        parser = task.LinkParser("https://www.bmj.com", (r"^/content/[0-9]+/bmj-[0-9]{4}-[0-9]+$",))
+        parser.feed(
+            """
+            <a href="/content/393/bmj-2025-087975">Research</a>
+            <a href="/content/393/news-2025-000001">News</a>
+            """
+        )
+
+        self.assertEqual(parser.links, ["https://www.bmj.com/content/393/bmj-2025-087975"])
+
+    def test_html_link_discovery_uses_listing_title_and_date(self) -> None:
+        source = task.JournalSource(
+            name="The BMJ",
+            listing_url="https://www.bmj.com/research/research",
+            discovery="html_links",
+            base_url="https://www.bmj.com",
+            article_url_patterns=(r"^/content/[0-9]+/bmj-[0-9]{4}-[0-9]+$",),
+        )
+        html = """
+        <section data-testid="article-entry-large">
+          <a data-testid="article-entry-link" href="/content/393/bmj-2025-087975">
+            <h2 data-testid="article-entry-title">Outcome switching in cohort studies</h2>
+          </a>
+          <span data-testid="article-entry-date">May 27, 2026</span>
+        </section>
+        """
+
+        original_fetch_text = task.fetch_text
+        try:
+            task.fetch_text = lambda _url: html
+            candidates = task.discover_html_link_article_candidates(source)
+        finally:
+            task.fetch_text = original_fetch_text
+
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0].title, "Outcome switching in cohort studies")
+        self.assertEqual(candidates[0].published, "May 27, 2026")
+        self.assertEqual(candidates[0].journal, "The BMJ")
+
     def test_pdf_url_prefers_citation_meta(self) -> None:
         pdf_url = task.build_pdf_url(
             {"citation_pdf_url": ["https://example.test/paper.pdf"]},
@@ -139,6 +187,27 @@ class NatureDailyDigestTests(unittest.TestCase):
         self.assertEqual(
             pdf_url,
             "https://www.cell.com/action/showPdf?pii=S0092-8674%2826%2900394-6",
+        )
+
+    def test_pdf_url_falls_back_to_medical_publisher_pdfs(self) -> None:
+        self.assertEqual(
+            task.build_pdf_url({}, "https://www.nejm.org/doi/full/10.1056/NEJMoa2509306"),
+            "https://www.nejm.org/doi/pdf/10.1056/NEJMoa2509306",
+        )
+        self.assertEqual(
+            task.build_pdf_url(
+                {},
+                "https://www.thelancet.com/journals/lancet/article/PIIS0140-6736(26)00961-X/fulltext",
+            ),
+            "https://www.thelancet.com/action/showPdf?pii=PIIS0140-6736%2826%2900961-X",
+        )
+        self.assertEqual(
+            task.build_pdf_url({}, "https://www.bmj.com/content/393/bmj-2025-087975"),
+            "https://www.bmj.com/content/393/bmj-2025-087975.full.pdf",
+        )
+        self.assertEqual(
+            task.build_pdf_url({}, "https://jamanetwork.com/journals/jama/fullarticle/2849449"),
+            "https://jamanetwork.com/journals/jama/articlepdf/2849449",
         )
 
     def test_parse_publication_date_supports_common_formats(self) -> None:
@@ -216,6 +285,39 @@ class NatureDailyDigestTests(unittest.TestCase):
             )
         finally:
             task.fetch_text = original_fetch_text
+
+    def test_rss_discovery_supports_rss_two_items(self) -> None:
+        source = task.JournalSource(
+            name="JAMA",
+            listing_url="https://jamanetwork.com/journals/jama/newonline/2026/5",
+            discovery="rss",
+            base_url="https://jamanetwork.com",
+            feed_url="https://example.test/feed",
+        )
+        rss = """
+        <rss version="2.0">
+          <channel>
+            <item>
+              <title>JAMA paper</title>
+              <link>https://jamanetwork.com/journals/jama/fullarticle/2849449?guestAccessKey=x</link>
+              <pubDate>Wed, 27 May 2026 00:00:00 GMT</pubDate>
+              <description>A clinical update.</description>
+            </item>
+          </channel>
+        </rss>
+        """
+
+        original_fetch_text = task.fetch_text
+        try:
+            task.fetch_text = lambda _url: rss
+            candidates = task.discover_rss_article_candidates(source)
+        finally:
+            task.fetch_text = original_fetch_text
+
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0].url, "https://jamanetwork.com/journals/jama/fullarticle/2849449")
+        self.assertEqual(candidates[0].published, "Wed, 27 May 2026 00:00:00 GMT")
+        self.assertEqual(candidates[0].summary_source, "A clinical update.")
 
     def test_summary_is_normalized_to_exactly_eight_sentences(self) -> None:
         summary = task.normalize_to_eight(["첫 문장입니다.", "  ", "둘째 문장입니다."])

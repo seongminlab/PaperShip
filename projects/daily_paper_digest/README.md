@@ -12,12 +12,17 @@ Currently monitored sources:
 - Science
 - Science Advances
 - Science Translational Medicine
+- JAMA
+- New England Journal of Medicine
+- The Lancet
+- The BMJ
+- Annals of Internal Medicine
 
 The source list lives in:
 
-`projects/daily_paper_digest/journals.json`
+`config/journals.json`
 
-Add or remove journals there, then run the tests before relying on the morning automation.
+Add or remove journals there, then run the tests before relying on the morning automation. In normal use, journal source changes should only require edits inside `config/`.
 
 Each Telegram message includes:
 
@@ -104,7 +109,7 @@ If `OPENAI_API_KEY` is set, summaries are generated as natural Korean. Without i
 
 The project sends unseen articles whose publication date matches the local date when the code runs or the previous day. For example, a run on `2026-05-27` can send articles published on `2026-05-27` or `2026-05-26`, but articles already recorded in `data/daily_paper_digest/seen_articles.json` are skipped.
 
-Nature-family journals are discovered from their research article listing pages. Cell and Science-family journals are discovered from official RSS feeds because their article listing or article pages can reject automated HTML requests.
+Nature-family journals are discovered from their research article listing pages. Cell, Science-family, and most medical journals are discovered from official RSS feeds because their article listing or article pages can reject automated HTML requests. The BMJ uses a configured HTML link pattern for its research listing page.
 
 After daily article messages, the project sends `오늘의 관심 후보 TOP 3` with paper title, journal, and three short keywords.
 
@@ -131,6 +136,18 @@ For a publisher RSS feed:
   "base_url": "https://example.test",
   "feed_url": "https://example.test/action/showFeed?type=etoc&feed=rss&jc=example",
   "allowed_item_types": ["Research Article"]
+}
+```
+
+For a publisher listing page that exposes article links in HTML:
+
+```json
+{
+  "name": "Example HTML Journal",
+  "listing_url": "https://example.test/research",
+  "discovery": "html_links",
+  "base_url": "https://example.test",
+  "article_url_patterns": ["^/content/[0-9]+/example-[0-9]+$"]
 }
 ```
 

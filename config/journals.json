@@ -54,5 +54,41 @@
     "base_url": "https://www.science.org",
     "feed_url": "https://www.science.org/action/showFeed?type=etoc&feed=rss&jc=stm",
     "allowed_item_types": ["Research Article"]
+  },
+  {
+    "name": "JAMA",
+    "listing_url": "https://jamanetwork.com/journals/jama/newonline/2026/5",
+    "discovery": "rss",
+    "base_url": "https://jamanetwork.com",
+    "feed_url": "https://jamanetwork.com/rss/site_3/onlineFirst_67.xml"
+  },
+  {
+    "name": "New England Journal of Medicine",
+    "listing_url": "https://www.nejm.org/toc/nejm/recently-published",
+    "discovery": "rss",
+    "base_url": "https://www.nejm.org",
+    "feed_url": "https://www.nejm.org/action/showFeed?jc=nejm&type=etoc&feed=rss"
+  },
+  {
+    "name": "The Lancet",
+    "listing_url": "https://www.thelancet.com/latest-research",
+    "discovery": "rss",
+    "base_url": "https://www.thelancet.com",
+    "feed_url": "https://www.thelancet.com/rssfeed/lancet_online.xml",
+    "allowed_item_types": ["Articles"]
+  },
+  {
+    "name": "The BMJ",
+    "listing_url": "https://www.bmj.com/research/research",
+    "discovery": "html_links",
+    "base_url": "https://www.bmj.com",
+    "article_url_patterns": ["^/content/[0-9]+/bmj-[0-9]{4}-[0-9]+$"]
+  },
+  {
+    "name": "Annals of Internal Medicine",
+    "listing_url": "https://www.acpjournals.org/latest/aim",
+    "discovery": "rss",
+    "base_url": "https://www.acpjournals.org",
+    "feed_url": "https://www.acpjournals.org/action/showFeed?type=etoc&feed=rss&jc=aim"
   }
 ]

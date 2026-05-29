@@ -574,7 +574,245 @@ def build_pdf_url(meta: dict[str, list[str]], article_url: str) -> str | None:
     if jama_match:
         return f"https://jamanetwork.com/journals/jama/articlepdf/{jama_match.group(1)}"
 
+    oup_match = re.search(r"academic\.oup\.com/([^/]+)/article/([^/]+)/([^/]+)/([^/?#]+)/(\d+)", article_url)
+    if oup_match:
+        journal, volume, issue, slug, article_id_value = oup_match.groups()
+        return f"https://academic.oup.com/{journal}/article-pdf/{volume}/{issue}/{slug}/{article_id_value}/{slug}.pdf"
+
     return None
+
+
+def infer_doi_from_url(url: str) -> str | None:
+    doi_match = re.search(r"(10\.\d{4,9}/[^?#\s]+)", url)
+    if doi_match:
+        return doi_match.group(1).rstrip("/")
+
+    oup_match = re.search(r"academic\.oup\.com/([^/]+)/article/[^/]+/[^/]+/([^/?#]+)/\d+", url)
+    if oup_match:
+        journal, slug = oup_match.groups()
+        if is_oup_page_like_slug(slug):
+            return None
+        return f"10.1093/{journal}/{slug}"
+
+    return None
+
+
+def crossref_article(url: str) -> Article | None:
+    doi = infer_doi_from_url(url)
+    if not doi:
+        return crossref_article_by_oup_page(url)
+
+    message = crossref_work_message(doi)
+    if message is None:
+        return crossref_article_by_oup_page(url)
+
+    return article_from_crossref_message(url, message, doi)
+
+
+def crossref_work_message(doi: str) -> dict[str, Any] | None:
+    request = Request(
+        f"https://api.crossref.org/works/{quote(doi, safe='')}",
+        headers={
+            "User-Agent": "PaperShip journal-digest/1.0",
+            "Accept": "application/json",
+        },
+    )
+    timeout = int(os.getenv("JOURNAL_REQUEST_TIMEOUT", os.getenv("NATURE_REQUEST_TIMEOUT", "25")))
+    try:
+        with urlopen(request, timeout=timeout) as response:
+            body = json.loads(response.read().decode("utf-8", errors="replace"))
+    except HTTPError as exc:
+        if exc.code == 404:
+            return None
+        raise
+
+    message = body.get("message", {})
+    if not isinstance(message, dict):
+        return None
+    return message
+
+
+def article_from_crossref_message(url: str, message: dict[str, Any], doi: str | None = None) -> Article:
+    title = first_crossref_string(message, "title") or doi or "Untitled"
+    journal = first_crossref_string(message, "container-title", "short-container-title") or "Unknown"
+    abstract = html_to_text(str(message.get("abstract") or ""))
+    authors = crossref_authors(message.get("author"))
+    published = crossref_date(message)
+    return Article(
+        url=canonical_url(url),
+        title=title,
+        journal=journal,
+        authors=authors,
+        summary_source=abstract or title,
+        published=published,
+        pdf_url=build_pdf_url({}, url) or build_oup_pdf_url(url, doi),
+    )
+
+
+def build_oup_pdf_url(url: str, doi: str | None) -> str | None:
+    if not doi:
+        return None
+    oup_match = re.search(r"academic\.oup\.com/([^/]+)/article/([^/]+)/([^/]+)/([^/?#]+)/(\d+)", url)
+    doi_match = re.search(r"10\.1093/[^/]+/([^/?#]+)", doi)
+    if not oup_match or not doi_match:
+        return None
+    journal, volume, issue, _slug, article_id_value = oup_match.groups()
+    article_code = doi_match.group(1)
+    return f"https://academic.oup.com/{journal}/article-pdf/{volume}/{issue}/{article_code}/{article_id_value}/{article_code}.pdf"
+
+
+def crossref_article_by_oup_page(url: str) -> Article | None:
+    oup_match = re.search(r"academic\.oup\.com/([^/]+)/article/([^/]+)/([^/]+)/([^/?#]+)/(\d+)", url)
+    if not oup_match:
+        return None
+    journal, volume, issue, page_or_slug, _article_id_value = oup_match.groups()
+    if not is_oup_page_like_slug(page_or_slug):
+        return None
+
+    message = crossref_search_oup_page(journal, volume, issue, page_or_slug)
+    if not message:
+        return None
+    doi = str(message.get("DOI") or "")
+    return article_from_crossref_message(url, message, doi or None)
+
+
+def crossref_search_oup_page(journal: str, volume: str, issue: str, page: str) -> dict[str, Any] | None:
+    queries = [
+        f"{journal} {volume} {issue} {page}",
+        f"{oup_journal_title(journal)} {volume} {issue} {page}",
+    ]
+    timeout = int(os.getenv("JOURNAL_REQUEST_TIMEOUT", os.getenv("NATURE_REQUEST_TIMEOUT", "25")))
+    for query in queries:
+        request = Request(
+            f"https://api.crossref.org/works?query.bibliographic={quote(query)}&rows=10",
+            headers={
+                "User-Agent": "PaperShip journal-digest/1.0",
+                "Accept": "application/json",
+            },
+        )
+        with urlopen(request, timeout=timeout) as response:
+            body = json.loads(response.read().decode("utf-8", errors="replace"))
+        items = body.get("message", {}).get("items", [])
+        if not isinstance(items, list):
+            continue
+        match = best_crossref_page_match(items, journal, volume, issue, page)
+        if match:
+            return match
+    return None
+
+
+def best_crossref_page_match(
+    items: list[Any],
+    journal: str,
+    volume: str,
+    issue: str,
+    page: str,
+) -> dict[str, Any] | None:
+    expected_title = oup_journal_title(journal).casefold()
+    expected_doi_segment = oup_doi_journal_segment(journal)
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("volume") or "") != volume:
+            continue
+        if str(item.get("issue") or "") != issue:
+            continue
+        page_value = str(item.get("page") or "")
+        if not (page_value == page or page_value.startswith(f"{page}-")):
+            continue
+        doi = str(item.get("DOI") or "").casefold()
+        container = " ".join(str(part) for part in item.get("container-title", [])).casefold()
+        if expected_doi_segment and f"10.1093/{expected_doi_segment}/" in doi:
+            return item
+        if expected_title and expected_title in container:
+            return item
+    return None
+
+
+def oup_journal_title(journal: str) -> str:
+    titles = {
+        "mbe": "Molecular Biology and Evolution",
+        "gbe": "Genome Biology and Evolution",
+        "nar": "Nucleic Acids Research",
+    }
+    return titles.get(journal, journal)
+
+
+def oup_doi_journal_segment(journal: str) -> str:
+    segments = {
+        "mbe": "molbev",
+        "gbe": "gbe",
+        "nar": "nar",
+    }
+    return segments.get(journal, journal)
+
+
+def is_oup_page_like_slug(slug: str) -> bool:
+    return bool(re.fullmatch(r"\d+|e\d+", slug, flags=re.IGNORECASE))
+
+
+def first_crossref_string(message: dict[str, Any], *keys: str) -> str:
+    for key in keys:
+        value = message.get(key)
+        if isinstance(value, list):
+            for item in value:
+                if isinstance(item, str) and item.strip():
+                    return item.strip()
+        elif isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def crossref_authors(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    authors: list[str] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        given = str(item.get("given") or "").strip()
+        family = str(item.get("family") or "").strip()
+        name = " ".join(part for part in (given, family) if part).strip()
+        if name:
+            authors.append(name)
+    return authors
+
+
+def crossref_date(message: dict[str, Any]) -> str:
+    for key in ("published-online", "published-print", "published", "created"):
+        value = message.get(key)
+        if not isinstance(value, dict):
+            continue
+        date_parts = value.get("date-parts")
+        if not isinstance(date_parts, list) or not date_parts:
+            continue
+        first_part = date_parts[0]
+        if not isinstance(first_part, list) or not first_part:
+            continue
+        year = int(first_part[0])
+        month = int(first_part[1]) if len(first_part) > 1 else 1
+        day = int(first_part[2]) if len(first_part) > 2 else 1
+        return date(year, month, day).isoformat()
+    return ""
+
+
+def fallback_article_from_url(url: str) -> Article:
+    crossref = crossref_article(url)
+    if crossref:
+        return crossref
+
+    path_parts = [part for part in urlsplit(url).path.split("/") if part]
+    title = path_parts[-2] if len(path_parts) >= 2 and path_parts[-1].isdigit() else (path_parts[-1] if path_parts else url)
+    title = re.sub(r"[-_]+", " ", title).strip() or url
+    return Article(
+        url=canonical_url(url),
+        title=title,
+        journal=urlsplit(url).netloc or "Unknown",
+        authors=[],
+        summary_source=title,
+        published="",
+        pdf_url=build_pdf_url({}, url),
+    )
 
 
 def article_from_candidate(candidate: ArticleCandidate) -> Article:

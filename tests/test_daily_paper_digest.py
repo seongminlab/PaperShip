@@ -209,6 +209,106 @@ class NatureDailyDigestTests(unittest.TestCase):
             task.build_pdf_url({}, "https://jamanetwork.com/journals/jama/fullarticle/2849449"),
             "https://jamanetwork.com/journals/jama/articlepdf/2849449",
         )
+        self.assertEqual(
+            task.build_pdf_url({}, "https://academic.oup.com/gbe/article/18/3/evag040/8499618"),
+            "https://academic.oup.com/gbe/article-pdf/18/3/evag040/8499618/evag040.pdf",
+        )
+
+    def test_infer_doi_from_oup_article_url(self) -> None:
+        self.assertEqual(
+            task.infer_doi_from_url("https://academic.oup.com/gbe/article/18/3/evag040/8499618"),
+            "10.1093/gbe/evag040",
+        )
+        self.assertIsNone(
+            task.infer_doi_from_url("https://academic.oup.com/mbe/article/37/12/3672/5870839")
+        )
+        self.assertIsNone(
+            task.infer_doi_from_url("https://academic.oup.com/nar/article/52/7/e37/7624077")
+        )
+
+    def test_crossref_page_match_selects_oup_numeric_article(self) -> None:
+        items = [
+            {
+                "DOI": "10.1093/molbev/msaa205",
+                "container-title": ["Molecular Biology and Evolution"],
+                "volume": "37",
+                "issue": "12",
+                "page": "3699-3700",
+            },
+            {
+                "DOI": "10.1093/molbev/msaa181",
+                "container-title": ["Molecular Biology and Evolution"],
+                "volume": "37",
+                "issue": "12",
+                "page": "3672-3683",
+            },
+        ]
+
+        match = task.best_crossref_page_match(items, "mbe", "37", "12", "3672")
+
+        self.assertIsNotNone(match)
+        self.assertEqual(match["DOI"], "10.1093/molbev/msaa181")
+
+    def test_crossref_page_match_selects_oup_e_page_article(self) -> None:
+        items = [
+            {
+                "DOI": "10.1093/nar/gkv1093",
+                "container-title": ["Nucleic Acids Research"],
+                "volume": "44",
+                "issue": "4",
+                "page": "e37-e37",
+            },
+            {
+                "DOI": "10.1093/nar/gkae126",
+                "container-title": ["Nucleic Acids Research"],
+                "volume": "52",
+                "issue": "7",
+                "page": "e37-e37",
+            },
+        ]
+
+        match = task.best_crossref_page_match(items, "nar", "52", "7", "e37")
+
+        self.assertIsNotNone(match)
+        self.assertEqual(match["DOI"], "10.1093/nar/gkae126")
+
+    def test_article_from_crossref_message_keeps_original_oup_pdf_slug(self) -> None:
+        article = task.article_from_crossref_message(
+            "https://academic.oup.com/mbe/article/37/12/3672/5870839",
+            {
+                "DOI": "10.1093/molbev/msaa181",
+                "title": ["Is Phylotranscriptomics as Reliable as Phylogenomics?"],
+                "container-title": ["Molecular Biology and Evolution"],
+                "volume": "37",
+                "issue": "12",
+                "page": "3672-3683",
+            },
+            "10.1093/molbev/msaa181",
+        )
+
+        self.assertEqual(article.title, "Is Phylotranscriptomics as Reliable as Phylogenomics?")
+        self.assertEqual(
+            article.pdf_url,
+            "https://academic.oup.com/mbe/article-pdf/37/12/3672/5870839/3672.pdf",
+        )
+
+    def test_fallback_article_from_url_uses_crossref_when_available(self) -> None:
+        article = task.Article(
+            url="https://academic.oup.com/gbe/article/18/3/evag040/8499618",
+            title="A GBE paper",
+            journal="Genome Biology and Evolution",
+            authors=["Ada Lovelace"],
+            summary_source="A source abstract.",
+            published="2026-03-01",
+            pdf_url="https://academic.oup.com/gbe/article-pdf/18/3/evag040/8499618/evag040.pdf",
+        )
+        original_crossref_article = task.crossref_article
+        try:
+            task.crossref_article = lambda _url: article
+
+            self.assertEqual(task.fallback_article_from_url(article.url), article)
+        finally:
+            task.crossref_article = original_crossref_article
 
     def test_parse_publication_date_supports_common_formats(self) -> None:
         self.assertEqual(task.parse_publication_date("2026-05-27"), task.date(2026, 5, 27))
@@ -537,6 +637,97 @@ class NatureDailyDigestTests(unittest.TestCase):
             listener.send_message = original_send_message
 
         self.assertEqual(processed, [(article.url, 123, True)])
+
+    def test_article_from_url_falls_back_when_article_page_is_blocked(self) -> None:
+        url = "https://academic.oup.com/gbe/article/18/3/evag040/8499618"
+        article = task.Article(
+            url=url,
+            title="A GBE paper",
+            journal="Genome Biology and Evolution",
+            authors=[],
+            summary_source="A source abstract.",
+            published="2026-03-01",
+            pdf_url="https://academic.oup.com/gbe/article-pdf/18/3/evag040/8499618/evag040.pdf",
+        )
+        original_candidate_from_known_feeds = listener.candidate_from_known_feeds
+        original_source_for_url = listener.source_for_url
+        original_fetch_article = listener.task.fetch_article
+        original_fallback_article_from_url = listener.task.fallback_article_from_url
+        try:
+            listener.candidate_from_known_feeds = lambda _url: None
+            listener.source_for_url = lambda source_url: task.JournalSource(
+                name="Unknown",
+                listing_url=source_url,
+                discovery="nature_html",
+                base_url="https://academic.oup.com",
+            )
+            listener.task.fetch_article = lambda _candidate: (_ for _ in ()).throw(RuntimeError("blocked"))
+            listener.task.fallback_article_from_url = lambda fallback_url: article
+
+            self.assertEqual(listener.article_from_url(url), article)
+        finally:
+            listener.candidate_from_known_feeds = original_candidate_from_known_feeds
+            listener.source_for_url = original_source_for_url
+            listener.task.fetch_article = original_fetch_article
+            listener.task.fallback_article_from_url = original_fallback_article_from_url
+
+    def test_process_interest_refreshes_placeholder_existing_record(self) -> None:
+        article = task.Article(
+            url="https://academic.oup.com/nar/article/52/7/e37/7624077",
+            title="Identification of G-quadruplex-interacting proteins in living cells",
+            journal="Nucleic Acids Research",
+            authors=[],
+            summary_source="A useful abstract.",
+            published="2024-02-01",
+            pdf_url="https://academic.oup.com/nar/article-pdf/52/7/gkae126/7624077/gkae126.pdf",
+        )
+        sent_messages = []
+        original_keywords_path = task.KEYWORDS_PATH
+        original_listener_keywords_path = listener.task.KEYWORDS_PATH
+        original_download_pdf = listener.download_pdf
+        original_korean_summary = listener.task.korean_summary
+        original_article_keywords = listener.task.article_keywords
+        original_send_message = listener.send_message
+        try:
+            with TemporaryDirectory() as temp_dir:
+                task.KEYWORDS_PATH = Path(temp_dir) / "keywords.json"
+                listener.task.KEYWORDS_PATH = task.KEYWORDS_PATH
+                task.save_interested_article(
+                    task.Article(
+                        url=article.url,
+                        title="e37",
+                        journal="academic.oup.com",
+                        authors=[],
+                        summary_source="e37",
+                        published="",
+                        pdf_url=None,
+                    ),
+                    ["부족한 요약입니다."],
+                    ["e37"],
+                    None,
+                    "PDF 다운로드 요청 실패: HTTP Error 403: Forbidden",
+                )
+                listener.download_pdf = lambda article_arg: (None, "PDF 다운로드 요청 실패: HTTP Error 403: Forbidden")
+                listener.task.korean_summary = lambda article_arg: ["새 요약입니다."]
+                listener.task.article_keywords = lambda article_arg: ["g-quadruplex"]
+                listener.send_message = lambda chat_id, text, buttons=None: sent_messages.append(text)
+
+                listener.process_interest(article, 123, include_summary=True)
+
+                refreshed = task.load_interested_article_record(article.url)
+        finally:
+            task.KEYWORDS_PATH = original_keywords_path
+            listener.task.KEYWORDS_PATH = original_listener_keywords_path
+            listener.download_pdf = original_download_pdf
+            listener.task.korean_summary = original_korean_summary
+            listener.task.article_keywords = original_article_keywords
+            listener.send_message = original_send_message
+
+        self.assertIsNotNone(refreshed)
+        self.assertEqual(refreshed["title"], article.title)
+        self.assertIn("g-quadruplex", refreshed["keywords"])
+        self.assertIn(article.title, sent_messages[0])
+        self.assertNotIn("부족한 요약입니다.", sent_messages[0])
 
     def test_uploaded_pdf_without_caption_uses_filename_fallback(self) -> None:
         document = {

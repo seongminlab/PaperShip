@@ -216,7 +216,12 @@ def download_uploaded_pdf(document: dict[str, Any], article: task.Article) -> Pa
 
 def source_for_url(url: str) -> task.JournalSource:
     host = task.urlsplit(url).netloc
-    for source in task.load_journal_sources():
+    try:
+        sources = task.load_journal_sources()
+    except Exception:
+        logging.exception("Could not load journal source config; falling back to URL metadata")
+        sources = []
+    for source in sources:
         if task.urlsplit(source.base_url).netloc == host:
             return source
     return task.JournalSource(
@@ -229,7 +234,12 @@ def source_for_url(url: str) -> task.JournalSource:
 
 def candidate_from_known_feeds(url: str) -> task.ArticleCandidate | None:
     canonical = task.canonical_url(url)
-    for source in task.load_journal_sources():
+    try:
+        sources = task.load_journal_sources()
+    except Exception:
+        logging.exception("Could not load journal source config while scanning known feeds")
+        return None
+    for source in sources:
         if source.discovery != "rss":
             continue
         try:
@@ -248,7 +258,11 @@ def article_from_url(url: str) -> task.Article:
         return task.fetch_article(feed_candidate)
 
     source = source_for_url(canonical)
-    return task.fetch_article(task.ArticleCandidate(source=source, url=canonical))
+    try:
+        return task.fetch_article(task.ArticleCandidate(source=source, url=canonical))
+    except Exception:
+        logging.warning("Falling back to URL-derived metadata for %s", canonical)
+        return task.fallback_article_from_url(canonical)
 
 
 def extract_url(text: str) -> str | None:
@@ -318,10 +332,25 @@ def record_pdf_path(record: dict[str, Any]) -> Path | None:
     return Path(str(pdf_path))
 
 
+def should_refresh_record(record: dict[str, Any], article: task.Article) -> bool:
+    old_title = str(record.get("title") or "")
+    old_journal = str(record.get("journal") or "")
+    old_summary_source = str(record.get("summary_source") or "")
+    if is_placeholder_article_data(old_title, old_journal, old_summary_source):
+        return True
+    return bool(article.title and article.title != old_title and len(article.title) > len(old_title))
+
+
+def is_placeholder_article_data(title: str, journal: str, summary_source: str) -> bool:
+    host_like_journal = "." in journal and " " not in journal
+    short_title = len(title.strip()) <= 4
+    return short_title or host_like_journal or summary_source.strip() == title.strip()
+
+
 def process_interest(article: task.Article, chat_id: int | str, include_summary: bool) -> None:
     logging.info("Saving interested article: %s", article.url)
     existing_record = task.load_interested_article_record(article.url)
-    if existing_record:
+    if existing_record and not should_refresh_record(existing_record, article):
         summary = record_summary(existing_record)
         keywords = record_keywords(existing_record)
         pdf_path = record_pdf_path(existing_record)
